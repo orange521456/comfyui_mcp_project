@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.pyc
+
+logs/
+*.log
+
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+user_templates/*.json
+!src/templates/*.json
