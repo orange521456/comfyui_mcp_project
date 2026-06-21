@@ -19,7 +19,7 @@ from mcp.server.fastmcp import FastMCP
 
 from src.comfyui_client import ComfyUIClient
 from src.context import get_context
-from src.tools import models, nodes, workflow, execution, images, templates
+from src.tools import models, nodes, workflow, execution, images, templates, batch as batch_mod
 
 # ── Logging setup ──────────────────────────────────────────────────
 
@@ -159,6 +159,69 @@ def save_workflow(filepath: str, overwrite: bool = False) -> dict:
         overwrite: Whether to overwrite if the file already exists.
     """
     return workflow.save_workflow(filepath, overwrite)
+
+
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║                      BATCH GENERATION                             ║
+# ╚══════════════════════════════════════════════════════════════════╝
+
+@mcp.tool()
+def batch_generate_images(
+    script_prompt: str,
+    delimiter: str = "---",
+    checkpoint: str | None = None,
+    common_prefix: str = "",
+    common_suffix: str = "",
+    negative_prompt: str = "",
+    width: int = 1024,
+    height: int = 1024,
+    steps: int = 20,
+    cfg: float = 7.0,
+    seed: int = -1,
+    sampler_name: str = "euler_ancestral",
+    scheduler: str = "normal",
+    max_images: int = 10,
+    max_wait_seconds: int = 300,
+) -> dict:
+    """Split a multi-image script prompt into sub-prompts and generate one image per sub-prompt.
+
+    Separate image descriptions with ``---`` (or your own delimiter string, or blank lines).
+
+    Args:
+        script_prompt: Multi-image description. Each sub-prompt becomes one image.
+        delimiter: Separator string between image descriptions. Default ``---``.
+                   Pass an empty string to split by blank lines instead.
+        checkpoint: Optional checkpoint filename. If omitted, the first available checkpoint is used.
+        common_prefix: Optional text prepended to every sub-prompt (e.g. ``"pixel art, "``).
+        common_suffix: Optional text appended to every sub-prompt (e.g. ``", masterpiece"``).
+        negative_prompt: Shared negative prompt applied to every image.
+        width: Image width in pixels. Default 1024.
+        height: Image height in pixels. Default 1024.
+        steps: Sampling steps. Default 20.
+        cfg: CFG scale. Default 7.0.
+        seed: Seed (-1 for random). Default -1.
+        sampler_name: Sampler name. Default ``euler_ancestral``.
+        scheduler: Scheduler name. Default ``normal``.
+        max_images: Maximum number of images to generate from the script. Default 10.
+        max_wait_seconds: Maximum time in seconds to wait for any single image. Default 300.
+    """
+    return batch_mod.batch_generate_images(
+        script_prompt=script_prompt,
+        delimiter=delimiter,
+        checkpoint=checkpoint,
+        common_prefix=common_prefix,
+        common_suffix=common_suffix,
+        negative_prompt=negative_prompt,
+        width=width,
+        height=height,
+        steps=steps,
+        cfg=cfg,
+        seed=seed,
+        sampler_name=sampler_name,
+        scheduler=scheduler,
+        max_images=max_images,
+        max_wait_seconds=max_wait_seconds,
+    )
 
 
 # ╔══════════════════════════════════════════════════════════════════╗
