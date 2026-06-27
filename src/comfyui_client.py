@@ -1,9 +1,15 @@
 """ComfyUI REST API client — encapsulates all HTTP communication."""
 
+import asyncio
+import json
 import httpx
 import logging
 import os
-from typing import Any
+import uuid
+from typing import Any, AsyncIterator
+
+import websockets
+import websockets.asyncio.client
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +164,72 @@ class ComfyUIClient:
 
     def close(self):
         self._client.close()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# WebSocket client — real-time execution progress
+# ══════════════════════════════════════════════════════════════════════
+
+class ComfyUIWebSocket:
+    """Async WebSocket client for real-time ComfyUI execution events.
+
+    Connects to ws://{host}/ws?clientId={client_id} and yields events
+    as they arrive. Each event is a dict with 'type' and 'data' keys.
+
+    Usage:
+        ws = ComfyUIWebSocket("http://127.0.0.1:8188")
+        async for event in ws.listen("my-client-id"):
+            if event["type"] == "executing" and event["data"]["node"] is None:
+                break  # execution complete
+    """
+
+    def __init__(self, base_url: str = "http://127.0.0.1:8188"):
+        self.base_url = base_url.rstrip("/")
+        # Derive ws:// URL from http:// base
+        self.ws_url = self.base_url.replace("http://", "ws://", 1).replace("https://", "wss://", 1)
+
+    async def listen(self, client_id: str = "") -> AsyncIterator[dict]:
+        """Connect to ComfyUI WebSocket and yield events.
+
+        Args:
+            client_id: Unique client identifier. If empty, a UUID is generated.
+                       This should match the client_id used in submit_prompt()
+                       to receive events for that specific execution.
+
+        Yields:
+            dict: {"type": "event_type", "data": {...}}
+        """
+        if not client_id:
+            client_id = str(uuid.uuid4())
+
+        ws_url = f"{self.ws_url}/ws?clientId={client_id}"
+        logger.info("WebSocket connecting to %s", ws_url)
+
+        try:
+            async with websockets.asyncio.client.connect(ws_url, max_size=2**26) as ws:
+                logger.info("WebSocket connected (clientId=%s)", client_id)
+
+                async for raw in ws:
+                    if isinstance(raw, bytes):
+                        # Binary messages: preview images, skip for now
+                        continue
+
+                    try:
+                        message = json.loads(raw)
+                    except json.JSONDecodeError:
+                        logger.warning("WebSocket received non-JSON text: %s", raw[:200])
+                        continue
+
+                    event_type = message.get("type", "")
+                    data = message.get("data", {})
+
+                    yield {"type": event_type, "data": data}
+
+        except websockets.exceptions.ConnectionClosed as e:
+            logger.warning("WebSocket connection closed: %s", e)
+        except Exception as e:
+            logger.error("WebSocket error: %s", e)
+            raise
 
 
 class ComfyUIError(Exception):

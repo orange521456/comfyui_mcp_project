@@ -2,6 +2,7 @@
 
 import json
 import os
+import random
 import re
 from typing import Any
 
@@ -30,6 +31,9 @@ DEFAULT_PARAMS = {
     "seed": -1,
     "denoise": 1.0,
     "input_image": "",
+    "mask_image": "",
+    "grow_mask_by": 6,
+    "upscale_model": "",
     "filename_prefix": "ComfyUI",
 }
 
@@ -56,6 +60,21 @@ def _resolve_template(workflow: dict, params: dict) -> dict:
     return json.loads(workflow_str)
 
 
+def _fix_negative_seeds(workflow: dict) -> dict:
+    """Scan all nodes and replace negative seed values with random positive ints.
+
+    ComfyUI v0.25.0+ KSampler rejects seed < 0. This ensures any -1 seeds
+    are resolved to random values before submission.
+    """
+    for node_id, node in workflow.items():
+        inputs = node.get("inputs", {})
+        if "seed" in inputs:
+            seed = inputs["seed"]
+            if isinstance(seed, int) and seed < 0:
+                inputs["seed"] = random.randint(0, 2**31 - 1)
+    return workflow
+
+
 def load_template(template_name: str, params: dict | None = None) -> dict:
     """Load a workflow template and apply parameters."""
     params = params or {}
@@ -76,6 +95,7 @@ def load_template(template_name: str, params: dict | None = None) -> dict:
 
     if is_builtin:
         workflow = _resolve_template(template, params)
+        workflow = _fix_negative_seeds(workflow)
         applied = params
     else:
         # User template: just load it, params are ignored
@@ -109,15 +129,26 @@ def list_templates() -> dict:
 
 
 def build_workflow(ir: dict) -> dict:
-    """Build a workflow from an Intermediate Representation (IR)."""
+    """Build a workflow from an Intermediate Representation (IR).
+
+    Supports both legacy flat IR (type: txt2img/img2img) and Pipeline IR (type: pipeline).
+    Pipeline IR is the recommended approach for custom workflows.
+    """
     try:
         builder = WorkflowBuilder()
         workflow = builder.build(ir)
         get_context().set_workflow(workflow, ir=ir)
-        return {
+
+        result = {
             "success": True,
             "node_count": len(workflow),
         }
+
+        if ir.get("type") == "pipeline":
+            pipeline = ir.get("pipeline", [])
+            result["pipeline_modules"] = [m.get("module", "?") for m in pipeline]
+
+        return result
     except ValueError as e:
         return {"success": False, "error": str(e), "error_code": "INVALID_PARAM"}
     except Exception as e:

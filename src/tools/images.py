@@ -11,6 +11,8 @@ from PIL import Image
 from src.comfyui_client import ComfyUIClient
 
 THUMBNAIL_MAX_SIZE = int(os.environ.get("THUMBNAIL_MAX_SIZE", "512"))
+THUMBNAIL_FORMAT = os.environ.get("THUMBNAIL_FORMAT", "JPEG")
+THUMBNAIL_QUALITY = int(os.environ.get("THUMBNAIL_QUALITY", "85"))
 
 
 def _make_thumbnail(image_bytes: bytes) -> str:
@@ -19,12 +21,10 @@ def _make_thumbnail(image_bytes: bytes) -> str:
     img.thumbnail((THUMBNAIL_MAX_SIZE, THUMBNAIL_MAX_SIZE), Image.LANCZOS)
 
     buf = BytesIO()
-    img_format = img.format or "PNG"
-    if img_format.upper() == "JPEG":
-        img_format = "JPEG"
-    else:
-        img_format = "PNG"
-    img.save(buf, format=img_format)
+    fmt = THUMBNAIL_FORMAT.upper()
+    if fmt == "JPEG":
+        img = img.convert("RGB")
+    img.save(buf, format=fmt, quality=THUMBNAIL_QUALITY if fmt == "JPEG" else None)
     buf.seek(0)
     return base64.b64encode(buf.read()).decode("utf-8")
 

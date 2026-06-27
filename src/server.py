@@ -19,7 +19,7 @@ from mcp.server.fastmcp import FastMCP
 
 from src.comfyui_client import ComfyUIClient
 from src.context import get_context
-from src.tools import models, nodes, workflow, execution, images, templates, batch as batch_mod
+from src.tools import models, nodes, workflow, execution, images, templates
 
 # ── Logging setup ──────────────────────────────────────────────────
 
@@ -101,14 +101,15 @@ def get_node_types() -> dict:
 def load_template(template_name: str, params: dict | None = None) -> dict:
     """Load a workflow template (builtin or user) and set it as the current workflow.
 
-    Builtin templates: txt2img, img2img.
+    Builtin templates: txt2img, img2img, inpaint, upscale.
     User templates are loaded from the user_templates/ directory.
 
     Args:
         template_name: Name of the template (without .json extension).
         params: Optional parameter overrides dict. For builtin templates, keys include:
                 checkpoint, positive_prompt, negative_prompt, width, height, steps, cfg,
-                sampler_name, scheduler, seed, batch_size, denoise, input_image, filename_prefix.
+                sampler_name, scheduler, seed, batch_size, denoise, input_image, mask_image,
+                grow_mask_by, upscale_model, filename_prefix.
     """
     return workflow.load_template(template_name, params)
 
@@ -123,23 +124,46 @@ def list_templates() -> dict:
 def build_workflow(ir: dict) -> dict:
     """Build a workflow from an Intermediate Representation (IR) dict.
 
-    The IR format:
-        {
-            "type": "txt2img",          # required: "txt2img" or "img2img"
-            "checkpoint": "model.safetensors",  # required
-            "positive_prompt": "...",   # required
-            "negative_prompt": "...",   # optional
-            "width": 1024,              # optional, default 512
-            "height": 1024,             # optional, default 512
-            "steps": 20,                # optional
-            "cfg": 7.0,                 # optional
-            "sampler_name": "euler",    # optional
-            "scheduler": "normal",      # optional
-            "seed": 42,                 # optional, -1 for random
-            "batch_size": 1,            # optional
-            "denoise": 0.75,            # optional, mainly for img2img
-            "input_image": "file.png",  # required for img2img
-        }
+    Supports two IR formats:
+
+    1. Pipeline IR (recommended for custom workflows):
+       {
+           "type": "pipeline",
+           "meta": {
+               "positive_prompt": "a cat", "negative_prompt": "bad quality",
+               "width": 1024, "height": 1024, "steps": 20, "cfg": 7.0,
+               "sampler_name": "euler", "scheduler": "normal", "seed": -1,
+               "batch_size": 1, "filename_prefix": "ComfyUI"
+           },
+           "pipeline": [
+               {"module": "load_checkpoint", "checkpoint": "sd_xl.safetensors"},
+               {"module": "lora", "lora_name": "style.safetensors", "strength": 0.8},
+               {"module": "prompt_pos"},
+               {"module": "prompt_neg"},
+               {"module": "controlnet", "image": "pose.png", "control_net_name": "openpose.safetensors"},
+               {"module": "empty_latent"},
+               {"module": "ksampler"},
+               {"module": "vae_decode"},
+               {"module": "upscale", "upscale_model": "4x-UltraSharp.pth"},
+               {"module": "save_image"}
+           ]
+       }
+
+       Available pipeline modules: load_checkpoint, lora, prompt_pos, prompt_neg,
+       empty_latent, controlnet, load_image, vae_encode, ksampler, vae_decode,
+       upscale, save_image.
+
+    2. Legacy flat IR (txt2img/img2img):
+       {
+           "type": "txt2img",
+           "checkpoint": "model.safetensors",
+           "positive_prompt": "...",
+           "negative_prompt": "...",
+           "width": 1024, "height": 1024,
+           "steps": 20, "cfg": 7.0,
+           "sampler_name": "euler", "scheduler": "normal",
+           "seed": 42, "batch_size": 1
+       }
     """
     return workflow.build_workflow(ir)
 
@@ -162,69 +186,6 @@ def save_workflow(filepath: str, overwrite: bool = False) -> dict:
 
 
 # ╔══════════════════════════════════════════════════════════════════╗
-# ║                      BATCH GENERATION                             ║
-# ╚══════════════════════════════════════════════════════════════════╝
-
-@mcp.tool()
-def batch_generate_images(
-    script_prompt: str,
-    delimiter: str = "---",
-    checkpoint: str | None = None,
-    common_prefix: str = "",
-    common_suffix: str = "",
-    negative_prompt: str = "",
-    width: int = 1024,
-    height: int = 1024,
-    steps: int = 20,
-    cfg: float = 7.0,
-    seed: int = -1,
-    sampler_name: str = "euler_ancestral",
-    scheduler: str = "normal",
-    max_images: int = 10,
-    max_wait_seconds: int = 300,
-) -> dict:
-    """Split a multi-image script prompt into sub-prompts and generate one image per sub-prompt.
-
-    Separate image descriptions with ``---`` (or your own delimiter string, or blank lines).
-
-    Args:
-        script_prompt: Multi-image description. Each sub-prompt becomes one image.
-        delimiter: Separator string between image descriptions. Default ``---``.
-                   Pass an empty string to split by blank lines instead.
-        checkpoint: Optional checkpoint filename. If omitted, the first available checkpoint is used.
-        common_prefix: Optional text prepended to every sub-prompt (e.g. ``"pixel art, "``).
-        common_suffix: Optional text appended to every sub-prompt (e.g. ``", masterpiece"``).
-        negative_prompt: Shared negative prompt applied to every image.
-        width: Image width in pixels. Default 1024.
-        height: Image height in pixels. Default 1024.
-        steps: Sampling steps. Default 20.
-        cfg: CFG scale. Default 7.0.
-        seed: Seed (-1 for random). Default -1.
-        sampler_name: Sampler name. Default ``euler_ancestral``.
-        scheduler: Scheduler name. Default ``normal``.
-        max_images: Maximum number of images to generate from the script. Default 10.
-        max_wait_seconds: Maximum time in seconds to wait for any single image. Default 300.
-    """
-    return batch_mod.batch_generate_images(
-        script_prompt=script_prompt,
-        delimiter=delimiter,
-        checkpoint=checkpoint,
-        common_prefix=common_prefix,
-        common_suffix=common_suffix,
-        negative_prompt=negative_prompt,
-        width=width,
-        height=height,
-        steps=steps,
-        cfg=cfg,
-        seed=seed,
-        sampler_name=sampler_name,
-        scheduler=scheduler,
-        max_images=max_images,
-        max_wait_seconds=max_wait_seconds,
-    )
-
-
-# ╔══════════════════════════════════════════════════════════════════╗
 # ║                      EXECUTION TOOLS                             ║
 # ╚══════════════════════════════════════════════════════════════════╝
 
@@ -238,6 +199,22 @@ def execute_workflow(client_id: str = "") -> dict:
         client_id: Optional client identifier for WebSocket (future use).
     """
     return execution.execute_workflow(client, client_id)
+
+
+@mcp.tool()
+def execute_and_watch(client_id: str = "") -> dict:
+    """Submit workflow and watch execution in real-time via WebSocket.
+
+    This is the recommended method for executing workflows. It uses WebSocket
+    for real-time progress events (executing, progress, executed), with
+    automatic REST polling fallback if WebSocket is unavailable.
+
+    Returns the final result including status, outputs, and all events received.
+
+    Args:
+        client_id: Optional client identifier. If empty, a UUID is generated.
+    """
+    return execution.execute_and_watch(client, client_id)
 
 
 @mcp.tool()

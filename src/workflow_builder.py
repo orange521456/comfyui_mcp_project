@@ -1,23 +1,22 @@
-"""Workflow Builder — translates Intermediate Representation (IR) to ComfyUI native JSON."""
+"""Workflow Builder — translates Intermediate Representation (IR) to ComfyUI native JSON.
+
+Supports both legacy flat IR (txt2img/img2img) and Pipeline IR (module-based).
+"""
 
 from __future__ import annotations
 
 import logging
 import random
 
+from src.module_engine import ModuleEngine
+
 logger = logging.getLogger(__name__)
 
-# Seed must be >= 0 for ComfyUI's KSampler
-# Treat -1 (or any negative) as "random seed"
+
 def _resolve_seed(raw_seed) -> int:
     if raw_seed is None or raw_seed < 0:
         return random.randint(0, 2**31 - 1)
     return int(raw_seed)
-
-# ── IR → ComfyUI node type mapping ─────────────────────────────────
-
-# Node IDs for the standard txt2img pipeline
-NodeIdx = int  # just for readability, not enforced
 
 
 class WorkflowBuilder:
@@ -33,20 +32,27 @@ class WorkflowBuilder:
         return nid
 
     def build(self, ir: dict) -> dict:
-        """Build a ComfyUI workflow from an IR dict. Returns the workflow JSON."""
         self.workflow.clear()
         self._next_id = 1
 
         wf_type = ir.get("type", "txt2img")
 
-        if wf_type == "txt2img":
+        if wf_type == "pipeline":
+            return self._build_pipeline(ir)
+        elif wf_type == "txt2img":
             return self._build_txt2img(ir)
         elif wf_type == "img2img":
             return self._build_img2img(ir)
         else:
             raise ValueError(f"Unknown workflow type: {wf_type}")
 
-    # ── txt2img ───────────────────────────────────────────────────
+    # ── Pipeline IR ───────────────────────────────────────────────
+
+    def _build_pipeline(self, ir: dict) -> dict:
+        engine = ModuleEngine()
+        return engine.build(ir)
+
+    # ── txt2img (legacy) ──────────────────────────────────────────
 
     def _build_txt2img(self, ir: dict) -> dict:
         checkpoint = ir["checkpoint"]
@@ -63,35 +69,30 @@ class WorkflowBuilder:
         denoise = ir.get("denoise", 1.0)
         filename_prefix = ir.get("filename_prefix", "ComfyUI")
 
-        # Node 1: LoadCheckpoint
         n_load = self._alloc_id()
         self.workflow[n_load] = {
             "inputs": {"ckpt_name": checkpoint},
             "class_type": "CheckpointLoaderSimple",
         }
 
-        # Node 2: CLIPTextEncode (positive)
         n_pos = self._alloc_id()
         self.workflow[n_pos] = {
             "inputs": {"text": positive, "clip": [n_load, 1]},
             "class_type": "CLIPTextEncode",
         }
 
-        # Node 3: CLIPTextEncode (negative)
         n_neg = self._alloc_id()
         self.workflow[n_neg] = {
             "inputs": {"text": negative, "clip": [n_load, 1]},
             "class_type": "CLIPTextEncode",
         }
 
-        # Node 4: EmptyLatentImage
         n_latent = self._alloc_id()
         self.workflow[n_latent] = {
             "inputs": {"width": width, "height": height, "batch_size": batch_size},
             "class_type": "EmptyLatentImage",
         }
 
-        # Node 5: KSampler
         n_sample = self._alloc_id()
         self.workflow[n_sample] = {
             "inputs": {
@@ -109,14 +110,12 @@ class WorkflowBuilder:
             "class_type": "KSampler",
         }
 
-        # Node 6: VAEDecode
         n_decode = self._alloc_id()
         self.workflow[n_decode] = {
             "inputs": {"samples": [n_sample, 0], "vae": [n_load, 2]},
             "class_type": "VAEDecode",
         }
 
-        # Node 7: SaveImage (preview in UI) + PreviewImage
         n_save = self._alloc_id()
         self.workflow[n_save] = {
             "inputs": {"images": [n_decode, 0], "filename_prefix": filename_prefix},
@@ -125,7 +124,7 @@ class WorkflowBuilder:
 
         return dict(self.workflow)
 
-    # ── img2img ───────────────────────────────────────────────────
+    # ── img2img (legacy) ──────────────────────────────────────────
 
     def _build_img2img(self, ir: dict) -> dict:
         checkpoint = ir["checkpoint"]
@@ -142,42 +141,36 @@ class WorkflowBuilder:
         denoise = ir.get("denoise", 0.75)
         filename_prefix = ir.get("filename_prefix", "ComfyUI")
 
-        # Node 1: LoadCheckpoint (img2img)
         n_load = self._alloc_id()
         self.workflow[n_load] = {
             "inputs": {"ckpt_name": checkpoint},
             "class_type": "CheckpointLoaderSimple",
         }
 
-        # Node 2: CLIPTextEncode (positive)
         n_pos = self._alloc_id()
         self.workflow[n_pos] = {
             "inputs": {"text": positive, "clip": [n_load, 1]},
             "class_type": "CLIPTextEncode",
         }
 
-        # Node 3: CLIPTextEncode (negative)
         n_neg = self._alloc_id()
         self.workflow[n_neg] = {
             "inputs": {"text": negative, "clip": [n_load, 1]},
             "class_type": "CLIPTextEncode",
         }
 
-        # Node 4: LoadImage
         n_loader = self._alloc_id()
         self.workflow[n_loader] = {
             "inputs": {"image": input_image},
             "class_type": "LoadImage",
         }
 
-        # Node 5: VAEEncode (encode loaded image to latent)
         n_encode = self._alloc_id()
         self.workflow[n_encode] = {
             "inputs": {"pixels": [n_loader, 0], "vae": [n_load, 2]},
             "class_type": "VAEEncode",
         }
 
-        # Node 6: KSampler
         n_sample = self._alloc_id()
         self.workflow[n_sample] = {
             "inputs": {
@@ -195,14 +188,12 @@ class WorkflowBuilder:
             "class_type": "KSampler",
         }
 
-        # Node 7: VAEDecode
         n_decode = self._alloc_id()
         self.workflow[n_decode] = {
             "inputs": {"samples": [n_sample, 0], "vae": [n_load, 2]},
             "class_type": "VAEDecode",
         }
 
-        # Node 8: SaveImage
         n_save = self._alloc_id()
         self.workflow[n_save] = {
             "inputs": {"images": [n_decode, 0], "filename_prefix": filename_prefix},

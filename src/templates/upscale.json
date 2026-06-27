@@ -1,0 +1,1 @@
+{"1": {"inputs": {"image": "{{input_image}}"},"class_type": "LoadImage"},"2": {"inputs": {"model_name": "{{upscale_model}}"},"class_type": "UpscaleModelLoader"},"3": {"inputs": {"upscale_model": ["2", 0],"image": ["1", 0]},"class_type": "ImageUpscaleWithModel"},"4": {"inputs": {"images": ["3", 0],"filename_prefix": "{{filename_prefix}}"},"class_type": "SaveImage"}}

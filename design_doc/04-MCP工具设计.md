@@ -33,22 +33,23 @@
 | 2 | `get_node_types` | 节点管理 | 获取所有可用节点类型定义 |
 | 3 | `load_template` | 工作流 | 加载工作流模板（内置/用户自定义） |
 | 4 | `list_templates` | 工作流 | 列出所有可用模板 |
-| 5 | `build_workflow` | 工作流 | 基于中间表示(IR)构建工作流 |
-| 6 | `get_workflow` | 工作流 | 获取当前工作流 JSON |
+| 5 | `build_workflow` | 工作流 | 基于 Pipeline IR 构建工作流 |
+| 6 | `get_workflow` | 工作流 | 获取当前工作流节点列表 |
 | 7 | `save_workflow` | 工作流 | 保存当前工作流到文件 |
 | 8 | `execute_workflow` | 执行 | 提交工作流到 ComfyUI 执行 |
-| 9 | `get_execution_status` | 执行 | 查询执行状态/进度 |
-| 10 | `get_execution_history` | 执行 | 获取历史执行记录 |
-| 11 | `get_generated_image` | 图片 | 获取生成的图片（缩略图+原图路径） |
-| 12 | `upload_image` | 图片 | 上传图片到 ComfyUI |
-| 13 | `create_node` | 原子操作 | 创建节点 |
-| 14 | `update_node` | 原子操作 | 修改节点参数 |
-| 15 | `remove_node` | 原子操作 | 删除节点 |
-| 16 | `connect_nodes` | 原子操作 | 连接两个节点 |
-| 17 | `disconnect_nodes` | 原子操作 | 断开连接 |
-| 18 | `queue_clear` | 队列 | 清空执行队列 |
-| 19 | `queue_cancel` | 队列 | 取消当前执行 |
-| 20 | `queue_status` | 队列 | 查看队列状态 |
+| 9 | `execute_and_watch` | 执行 | 提交工作流并通过 WebSocket 实时监控执行过程（推荐） |
+| 10 | `get_execution_status` | 执行 | 查询执行状态/进度 |
+| 11 | `get_execution_history` | 执行 | 获取历史执行记录 |
+| 12 | `get_generated_image` | 图片 | 获取生成的图片（缩略图+原图路径） |
+| 13 | `upload_image` | 图片 | 上传图片到 ComfyUI |
+| 14 | `create_node` | 原子操作 | 创建节点 |
+| 15 | `update_node` | 原子操作 | 修改节点参数 |
+| 16 | `remove_node` | 原子操作 | 删除节点 |
+| 17 | `connect_nodes` | 原子操作 | 连接两个节点 |
+| 18 | `disconnect_nodes` | 原子操作 | 断开连接 |
+| 19 | `queue_clear` | 队列 | 清空执行队列 |
+| 20 | `queue_cancel` | 队列 | 取消当前执行 |
+| 21 | `queue_status` | 队列 | 查看队列状态 |
 
 ---
 
@@ -146,34 +147,34 @@
 
 ### 5. build_workflow
 
-基于中间表示(IR)构建工作流。
+基于 Pipeline IR 构建工作流。Pipeline IR 是一种声明式的模块化工作流描述方式，Agent 只需描述处理步骤序列，引擎自动创建节点并连线。
 
 ```
 参数:
   ir: object (必填)
-    中间表示，格式见 [03-工作流中间表示.md](./03-工作流中间表示.md)
+    Pipeline IR，格式见 [03-工作流中间表示.md](./03-工作流中间表示.md)
 
 返回:
   {
     "success": true,
-    "workflow": {...},  # 生成的 ComfyUI 原生 JSON
-    "node_count": 8
+    "node_count": 8,
+    "pipeline_modules": ["load_checkpoint", "prompt_pos", "prompt_neg", "empty_latent", "ksampler", "vae_decode", "save_image"]
   }
 ```
 
 ### 6. get_workflow
 
-获取当前内存中的工作流 JSON。
+获取当前内存中的工作流节点列表。
 
 ```
 参数: 无
 
 返回:
   {
-    "workflow": {...},  # 当前工作流完整 JSON
+    "success": true,
     "node_count": 8,
     "nodes": [
-      {"id": "1", "type": "LoadCheckpoint", "title": "Load Checkpoint"},
+      {"id": "1", "type": "CheckpointLoaderSimple", "title": "Load Checkpoint"},
       ...
     ]
   }
@@ -199,12 +200,14 @@
 
 ### 8. execute_workflow
 
-提交当前工作流到 ComfyUI 执行。
+提交当前工作流到 ComfyUI 执行。提交后立即返回 prompt_id，不等待执行完成。
+
+> **推荐使用 `execute_and_watch`**（见下方），它通过 WebSocket 实时监控执行过程，执行完成后自动返回结果。
 
 ```
 参数:
   client_id: string (可选)
-    客户端标识，用于 WebSocket 连接（后期使用）
+    客户端标识，用于 WebSocket 连接
 
 返回:
   {
@@ -213,7 +216,42 @@
   }
 ```
 
-### 9. get_execution_status
+### 9. execute_and_watch
+
+提交工作流并通过 WebSocket 实时监控执行，执行完成后自动返回结果。**这是推荐的执行方式**，自动处理 WebSocket 连接和 REST 降级。
+
+```
+参数:
+  client_id: string (可选)
+    客户端标识，用于 WebSocket 连接。不传则自动生成 UUID。
+
+返回:
+  {
+    "success": true,
+    "prompt_id": "abc123-def456",
+    "status": "completed",  # "running", "completed", "failed", "timeout"
+    "outputs": {            # 最终输出（同 get_execution_status）
+      "8": {"images": [{"filename": "ComfyUI_00001_.png", "type": "output"}]}
+    },
+    "events": [             # 所有 WebSocket 事件（或降级轮询事件）
+      {"type": "execution_start", "data": {"prompt_id": "abc123"}},
+      {"type": "progress", "data": {"value": 5, "max": 20, "node": "3"}},
+      {"type": "executing", "data": {"node": null, "prompt_id": "abc123"}}
+    ]
+  }
+```
+
+**工作流程：**
+
+```
+1. submit_prompt()  ──► REST 提交工作流，获得 prompt_id
+2. WebSocket 连接  ──► ws://host/ws?clientId=xxx
+3. 接收事件         ──► execution_start → progress → executing → executed
+4. 执行完成         ──► REST 获取最终 outputs
+5. 降级             ──► WebSocket 失败时自动回退到 REST 轮询
+```
+
+### 10. get_execution_status
 
 查询指定执行的进度和状态。
 
@@ -238,7 +276,7 @@
   }
 ```
 
-### 10. get_execution_history
+### 11. get_execution_history
 
 获取历史执行记录。
 
@@ -262,7 +300,7 @@
   }
 ```
 
-### 11. get_generated_image
+### 12. get_generated_image
 
 获取生成的图片。
 
@@ -272,7 +310,7 @@
     图片文件名
   subfolder: string (可选)
     子文件夹路径
-  type: string (可选, 默认: "output")
+  image_type: string (可选, 默认: "output")
     类型: "output" 或 "temp"
   thumbnail: boolean (可选, 默认: true)
     是否返回缩略图 base64
@@ -288,7 +326,7 @@
   }
 ```
 
-### 12. upload_image
+### 13. upload_image
 
 上传图片到 ComfyUI 的 input 目录。
 
@@ -310,7 +348,7 @@
   }
 ```
 
-### 13. create_node
+### 14. create_node
 
 在当前工作流中创建新节点。
 
@@ -331,7 +369,7 @@
   }
 ```
 
-### 14. update_node
+### 15. update_node
 
 修改已有节点的参数。
 
@@ -350,7 +388,7 @@
   }
 ```
 
-### 15. remove_node
+### 16. remove_node
 
 从当前工作流中删除节点。
 
@@ -366,7 +404,7 @@
   }
 ```
 
-### 16. connect_nodes
+### 17. connect_nodes
 
 连接两个节点的输入/输出槽位。
 
@@ -380,15 +418,17 @@
     目标节点 ID
   to_slot: int (必填)
     目标节点输入槽位索引
+  to_input_name: string (必填)
+    目标节点输入参数名（如 "model", "positive", "latent_image"）
 
 返回:
   {
     "success": true,
-    "link": {"from": ["15", 0], "to": ["16", 0]}
+    "link": {"from": ["15", 0], "to": ["16", "model"]}
   }
 ```
 
-### 17. disconnect_nodes
+### 18. disconnect_nodes
 
 断开节点连接。
 
@@ -396,8 +436,8 @@
 参数:
   node_id: string (必填)
     节点 ID
-  slot: int (必填)
-    槽位索引
+  input_name: string (必填)
+    输入参数名
 
 返回:
   {
@@ -405,7 +445,7 @@
   }
 ```
 
-### 18. queue_clear
+### 19. queue_clear
 
 清空 ComfyUI 执行队列。
 
@@ -419,7 +459,7 @@
   }
 ```
 
-### 19. queue_cancel
+### 20. queue_cancel
 
 取消当前正在执行的任务。
 
@@ -432,7 +472,7 @@
   }
 ```
 
-### 20. queue_status
+### 21. queue_status
 
 查看 ComfyUI 队列状态。
 
@@ -449,3 +489,14 @@
     ]
   }
 ```
+
+## Agent 多图生成指南
+
+Agent 需要生成多张图片时，不要使用单次工具调用，而是：
+
+1. 用大模型将用户的长描述语义拆分为多个独立的子 prompt
+2. 对每个子 prompt，依次调用 `build_workflow` → `execute_and_watch` → `get_generated_image`
+3. 汇总所有结果返回给用户
+
+> `execute_and_watch` 会自动等待执行完成并通过 WebSocket 返回状态，无需手动轮询 `get_execution_status`。
+> 如需兼容旧流程，仍可使用 `execute_workflow` + `get_execution_status` 的组合。
